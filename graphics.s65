@@ -1,0 +1,2 @@
+.segment "CHR"
+.incbin "graphics.bin", $0, $2000

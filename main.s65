@@ -1,0 +1,152 @@
+;
+; Main entry point
+;
+
+.include "defines.inc"
+
+; 6502 interrupt vectors
+.segment "VECTORS"
+	.word	NmiHandler
+	.word	ResetHandler
+	.word	IrqHandler
+
+;
+; Startup
+;
+.segment "CODE"
+
+ResetHandler:
+	sei		; ignore IRQs
+	cld		; disable decimal mode
+	ldx #$40	
+	stx FRAME_COUNTER	; disable frame counter IRQ
+
+	; reset the stack
+	ldx #$FF
+	txs
+
+	inx	; x = 0
+	stx PPU_CONTROL
+	stx PPU_MASK
+	stx DMC_FREQ
+
+	; reset PPU_STATUS before wait for vblank, it might not be cleared
+	bit PPU_STATUS
+	ppu_wait_for_vblank
+
+	; while the PPU stabilises, clear WRAM
+	txa	; x = 0, still, copy to a
+:	sta $0000, x
+	sta $0100, x
+	sta $0200, x
+	sta $0300, x
+	sta $0400, x
+	sta $0500, x
+	sta $0600, x
+	sta $0700, x
+	inx
+	bne :-
+
+	; TODO: init audio as well
+
+	ppu_wait_for_vblank
+
+	; fill the pallete
+	ppu_addr_set PALETTE_TILES
+	ldx #$00
+:	lda	#$0F
+	sta PPU_DATA
+	lda #$00
+	sta PPU_DATA
+	lda #$10
+	sta PPU_DATA
+	lda #$30
+	sta PPU_DATA
+	inx
+	cpx #$20
+	bne :-
+
+	; fill nametable
+	ppu_addr_set (NAMETABLE_0 + 64)
+	ldx #$00
+	txa
+	tay
+:	sta PPU_DATA
+	inx
+	bne :-
+	iny
+	cpy #$04
+	bne :-
+
+	ppu_wait_for_vblank
+
+	; write a hello world message
+	ppu_addr_set (NAMETABLE_0 + 64)
+	; x should be 0 at this point
+:	lda SomeData, x
+	sta PPU_DATA
+	inx
+	cmp #$FF
+	bne :-
+
+	; put some sprites
+	lda #128
+	sta $0200
+
+	lda #0
+	sta $0201
+
+	lda #0
+	sta $0202
+
+	lda #128
+	sta $0203
+
+	ppu_wait_for_vblank
+
+	; enable the ppu
+	lda #$00
+	sta PPU_SCROLL
+	sta PPU_SCROLL
+	lda #(PPU_SHOW_BG | PPU_SHOW_SPR | PPU_MASK_BG | PPU_MASK_SPR)
+	sta PPU_MASK
+	lda #(PPU_ENABLE_NMI | PPU_SPR_HIGH)
+	sta PPU_CONTROL
+
+	jmp Main
+
+SomeData:
+	.byte $21, $1E, $25, $25, $28, $00, $30, $28, $2B, $25, $1D, $FF
+
+	; fall thru to Main
+
+
+;
+; Main Loop
+;
+.segment "CODE"
+
+Main:
+	; do game loop here
+	jmp Main
+
+
+;
+; NMI Handler
+;
+.segment "CODE"
+
+NmiHandler:
+	; DMA the sprites to the PPU
+	lda #2
+	sta OAM_TRANSFER
+
+	rti
+
+
+;
+; IRQ Handler
+;
+IrqHandler:
+	; I assume this is for music?
+	rti
