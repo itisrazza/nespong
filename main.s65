@@ -52,19 +52,33 @@ ResetHandler:
 	ppu_wait_for_vblank
 
 	; fill the pallete
-	ppu_addr_set PALETTE_TILES
-	ldx #$00
-:	lda	#$0F
-	sta PPU_DATA
+	lda #$3F
+	sta PPUStringDest
 	lda #$00
-	sta PPU_DATA
-	lda #$10
-	sta PPU_DATA
-	lda #$30
-	sta PPU_DATA
-	inx
-	cpx #$20
-	bne :-
+	sta PPUStringDest + 1
+	lda #<PaletteData
+	sta PPUStringSrc
+	lda #>PaletteData
+	sta PPUStringSrc + 1
+	lda #32
+	sta PPUStringBytes
+	lda #0
+	sta PPUStringPages
+	jsr PPUStringCopy
+	
+;	ppu_addr_set PALETTE_TILES
+;	ldx #$00
+;:	lda	#$0F
+;	sta PPU_DATA
+;	lda #$00
+;	sta PPU_DATA
+;	lda #$10
+;	sta PPU_DATA
+;	lda #$30
+;	sta PPU_DATA
+;	inx
+;	cpx #$20
+;	bne :-
 
 	; fill nametable
 	ppu_addr_set (NAMETABLE_0 + 64)
@@ -89,31 +103,36 @@ ResetHandler:
 	cmp #$FF
 	bne :-
 
-	; put some sprites
-	lda #128
-	sta $0200
-
-	lda #0
-	sta $0201
-
-	lda #0
-	sta $0202
-
-	lda #128
-	sta $0203
+	; init game vars
+	lda #124
+	sta BallX
+	lda #118
+	sta BallY
+	sta Paddle1Y
+	sta Paddle2Y
 
 	ppu_wait_for_vblank
 
 	; enable the ppu
-	lda #$00
-	sta PPU_SCROLL
-	sta PPU_SCROLL
+	ppu_scroll_set 0, 0
 	lda #(PPU_SHOW_BG | PPU_SHOW_SPR | PPU_MASK_BG | PPU_MASK_SPR)
 	sta PPU_MASK
 	lda #(PPU_ENABLE_NMI | PPU_SPR_HIGH)
 	sta PPU_CONTROL
 
 	jmp Main
+
+.segment "DATA"
+
+PaletteData:
+	.byte $0F, $00, $10, $30
+	.byte $0F, $00, $10, $30
+	.byte $0F, $00, $10, $30
+	.byte $0F, $00, $10, $30
+	.byte $0F, $00, $10, $30
+	.byte $0F, $00, $10, $30
+	.byte $0F, $00, $10, $30
+	.byte $0F, $00, $10, $30
 
 SomeData:
 	.byte $21, $1E, $25, $25, $28, $00, $30, $28, $2B, $25, $1D, $FF
@@ -122,13 +141,145 @@ SomeData:
 
 
 ;
+; Global Variable Data
+;
+.segment "BSS"
+
+Controller1:
+.res 1
+
+Controller2:
+.res 1
+
+BallX:		.res 1
+BallY:		.res 1
+Paddle1Y:	.res 1
+Paddle2Y:	.res 1
+
+
+;
 ; Main Loop
 ;
 .segment "CODE"
 
 Main:
+@MainLoop:
+	; get the player controls
+	jsr PrepareSprites
+
 	; do game loop here
-	jmp Main
+	jmp @MainLoop
+
+
+ReadJoysticks:
+	; set the latch to 1, then 0, to capture the controller inputs
+	; this also has the nice side effect of storing the carry bit
+	lda #$01
+	sta JOYSTICK_LATCH
+	sta Controller1
+	lsr a
+	sta JOYSTICK_LATCH
+
+	; loop over the first controller
+:	lda JOYSTICK1
+	lsr a
+	rol Controller1
+	bcc :-
+
+	; move the first paddle
+	lda Controller1
+	and #BUTTON_UP
+	beq :+
+	lda Paddle1Y
+	sec
+	sbc #4
+	sta Paddle1Y
+:	lda Controller1
+	and #BUTTON_DOWN
+	beq :+
+	lda Paddle1Y
+	clc
+	adc #4
+	sta Paddle1Y
+:
+
+	rts
+
+
+PrepareSprites:
+	; set ball sprite
+	oam_sprite 0, #0, BallX, BallY, #0
+
+	; set paddle 1 sprite
+	; using A to store Y position, Y to store temps
+	ldx #0
+	lda Paddle1Y
+
+	sec
+	sbc #12
+	sta $0204
+	ldy #1
+	sty $0205
+	ldy #SPR_FLIP_H
+	sty $0206
+	ldy #24
+	sty $0207
+	clc
+
+	adc #8
+	sta $0208
+	ldy #2
+	sty $0209
+	ldy #SPR_FLIP_H
+	sty $020A
+	ldy #24
+	sty $020B
+	
+	adc #8
+	sta $020C
+	ldy #3
+	sty $020D
+	ldy #SPR_FLIP_H
+	sty $020E
+	ldy #24
+	sty $020F
+
+	; set paddle 1 sprite
+	; using A to store Y position, Y to store temps
+	ldx #0
+	lda Paddle1Y
+
+	sec
+	sbc #12
+	sta $0210
+	ldy #1
+	sty $0211
+	ldy #0
+	sty $0212
+	ldy #256-32
+	sty $0213
+	clc
+	
+	adc #8
+	sta $0214
+	ldy #2
+	sty $0215
+	ldy #0
+	sty $0216
+	ldy #256-32
+	sty $0217
+	
+	adc #8
+	sta $0218
+	ldy #3
+	sty $0219
+	ldy #0
+	sty $021A
+	ldy #256-32
+	sty $021B
+
+	rts
+
 
 
 ;
@@ -141,7 +292,59 @@ NmiHandler:
 	lda #2
 	sta OAM_TRANSFER
 
+	; update joysticks
+	jsr ReadJoysticks
+
 	rti
+
+
+; PPU string data copy
+.segment "ZEROPAGE" : zeropage
+.org $0020
+
+PPUStringDest: .res 2	; the PPU destination address (big endian)
+PPUStringSrc: .res 2	; the CPU source address (little endian)
+PPUStringBytes: .res 1	; number of bytes
+PPUStringPages: .res 1	; number of pages
+
+.segment "CODE" : absolute
+.reloc
+
+PPUStringCopy:
+	lda PPUStringBytes
+	ora PPUStringPages
+	beq @Return			; return if there is nothing to copy
+
+	; set the PPU address to destination
+	lda PPUStringDest
+	sta PPU_ADDR
+	lda PPUStringDest + 1
+	sta PPU_ADDR
+
+	; start block copying
+	ldx #0
+	ldy #0
+:	lda (PPUStringSrc), y
+	sta PPU_DATA
+	iny
+	cpy PPUStringBytes
+	bne :-
+
+	; finished copying page, check if we need to change
+	cpx PPUStringPages
+	beq @Finished
+	inc PPUStringSrc + 1	; increment the address by $0100
+	inx
+	bne :-
+
+@Finished:
+	; clear length
+	lda #0
+	sta PPUStringBytes
+	sta PPUStringPages
+
+@Return:
+	rts
 
 
 ;

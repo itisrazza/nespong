@@ -47,6 +47,27 @@
 	sta PPU_ADDR
 .endmacro
 
+.macro ppu_scroll_set xpos, ypos
+	bit PPU_STATUS	; reset register
+
+	lda #xpos
+	sta PPU_SCROLL
+
+	lda #ypos
+	sta PPU_SCROLL
+.endmacro
+
+.macro oam_sprite index, tile, xpos, ypos, attr
+	lda ypos
+	sta $0200 + (4 * index)
+	lda tile
+	sta $0200 + (4 * index) + 1
+	lda attr
+	sta $0200 + (4 * index) + 2
+	lda xpos
+	sta $0200 + (4 * index) + 3
+.endmacro
+
 .define SPR_PRIORITY	%00100000
 .define SPR_FLIP_H	%01000000
 .define SPR_FLIP_V	%10000000
@@ -96,3 +117,15 @@
 .define JOYSTICK1	$4016
 .define FRAME_COUNTER	$4017
 .define JOYSTICK2	$4017
+
+
+; Controllers
+
+.define BUTTON_A	1 << 7
+.define BUTTON_B	1 << 6
+.define BUTTON_SELECT	1 << 5
+.define BUTTON_START	1 << 4
+.define BUTTON_UP	1 << 3
+.define BUTTON_DOWN	1 << 2
+.define BUTTON_LEFT	1 << 1
+.define BUTTON_RIGHT	1 << 0
