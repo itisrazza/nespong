@@ -1,0 +1,7 @@
+*.o
+*.nes
+*.map
+*.dbg
+*.deb
+*.wch
+*.labels.txt
