@@ -38,12 +38,17 @@ ResetHandler:
 	txa	; x = 0, still, copy to a
 :	sta $0000, x
 	sta $0100, x
-	sta $0200, x
 	sta $0300, x
 	sta $0400, x
 	sta $0500, x
 	sta $0600, x
 	sta $0700, x
+	inx
+	bne :-
+
+	; $0200 is used for OAM, move all sprites off-screen
+	lda #$FF
+:	sta $0200, x
 	inx
 	bne :-
 
@@ -92,35 +97,122 @@ ResetHandler:
 	cpy #$04
 	bne :-
 
+	jsr DrawStage
+
 	ppu_wait_for_vblank
 
-	; write a hello world message
-	ppu_addr_set (NAMETABLE_0 + 64)
-	; x should be 0 at this point
-:	lda SomeData, x
-	sta PPU_DATA
-	inx
-	cmp #$FF
-	bne :-
-
 	; init game vars
+	
 	lda #124
 	sta BallX
+	
 	lda #118
 	sta BallY
 	sta Paddle1Y
 	sta Paddle2Y
 
+	lda #1
+	sta BallXDelta
+	sta BallYDelta
+
 	ppu_wait_for_vblank
 
 	; enable the ppu
-	ppu_scroll_set 0, 0
+	ppu_scroll_set 4, 0
 	lda #(PPU_SHOW_BG | PPU_SHOW_SPR | PPU_MASK_BG | PPU_MASK_SPR)
 	sta PPU_MASK
 	lda #(PPU_ENABLE_NMI | PPU_SPR_HIGH)
 	sta PPU_CONTROL
 
 	jmp Main
+
+
+.define ARENA_OFFSET_X	4
+.define ARENA_OFFSET_Y	3
+.define ARENA_WIDTH 	27
+.define ARENA_HEIGHT	24
+
+DrawStage:
+
+	; Draw vertical lines
+
+	; set PPU_DATA to vertical incrementation
+	lda #PPU_DATA_ROW
+	sta PPU_CONTROL
+
+	ppu_addr_set	$2042
+	lda #1
+	ldx #0
+:	sta PPU_DATA
+	inx
+	cpx #ARENA_HEIGHT
+	bne :-
+	
+	ppu_addr_set	$205E
+	lda #1
+	ldx #0
+:	sta PPU_DATA
+	inx
+	cpx #ARENA_HEIGHT
+	bne :-
+
+	ppu_addr_set	$2050
+	lda #9
+	ldx #0
+:	sta PPU_DATA
+	inx
+	cpx #ARENA_HEIGHT
+	bne :-
+
+	; Draw horizontal lines
+
+	lda #0
+	sta PPU_CONTROL
+
+	ppu_addr_set	$2023
+	lda #2
+	ldx #0
+:	sta PPU_DATA
+	inx
+	cpx	#ARENA_WIDTH
+	bne :-
+	
+	ppu_addr_set	$2343
+	lda #2
+	ldx #0
+:	sta PPU_DATA
+	inx
+	cpx	#ARENA_WIDTH
+	bne :-
+
+	; Draw corner tiles
+	
+	ppu_addr_set	$2022
+	lda #3
+	sta PPU_DATA
+	
+	ppu_addr_set	$203E
+	lda #4
+	sta PPU_DATA
+	
+	ppu_addr_set	$2342
+	lda #5
+	sta PPU_DATA
+	
+	ppu_addr_set	$235E
+	lda #6
+	sta PPU_DATA
+
+	ppu_addr_set	$2030
+	lda #7
+	sta PPU_DATA
+
+	ppu_addr_set	$2350
+	lda #8
+	sta PPU_DATA
+
+	rts
+
 
 .segment "DATA"
 
@@ -137,8 +229,6 @@ PaletteData:
 SomeData:
 	.byte $21, $1E, $25, $25, $28, $00, $30, $28, $2B, $25, $1D, $FF
 
-	; fall thru to Main
-
 
 ;
 ; Global Variable Data
@@ -153,9 +243,11 @@ Controller2:
 
 BallX:		.res 1
 BallY:		.res 1
+BallXDelta:	.res 1
+BallYDelta: .res 1
 Paddle1Y:	.res 1
 Paddle2Y:	.res 1
-
+BallDirection:	.res 1
 
 ;
 ; Main Loop
@@ -177,6 +269,7 @@ ReadJoysticks:
 	lda #$01
 	sta JOYSTICK_LATCH
 	sta Controller1
+	sta Controller2
 	lsr a
 	sta JOYSTICK_LATCH
 
@@ -186,21 +279,44 @@ ReadJoysticks:
 	rol Controller1
 	bcc :-
 
+	; loop over the second controller
+:	lda JOYSTICK2
+	lsr a
+	rol Controller2
+	bcc :-
+
 	; move the first paddle
 	lda Controller1
 	and #BUTTON_UP
 	beq :+
 	lda Paddle1Y
 	sec
-	sbc #4
+	sbc #8
 	sta Paddle1Y
 :	lda Controller1
 	and #BUTTON_DOWN
 	beq :+
 	lda Paddle1Y
 	clc
-	adc #4
+	adc #8
 	sta Paddle1Y
+:
+
+	; move the second paddle
+	lda Controller2
+	and #BUTTON_UP
+	beq :+
+	lda Paddle2Y
+	sec
+	sbc #8
+	sta Paddle2Y
+:	lda Controller2
+	and #BUTTON_DOWN
+	beq :+
+	lda Paddle2Y
+	clc
+	adc #8
+	sta Paddle2Y
 :
 
 	rts
@@ -244,10 +360,10 @@ PrepareSprites:
 	ldy #24
 	sty $020F
 
-	; set paddle 1 sprite
+	; set paddle 2 sprite
 	; using A to store Y position, Y to store temps
 	ldx #0
-	lda Paddle1Y
+	lda Paddle2Y
 
 	sec
 	sbc #12
@@ -281,6 +397,94 @@ PrepareSprites:
 	rts
 
 
+MoveBall:
+	; Horizontal move and bounds check
+
+	lda BallX
+	clc
+	adc BallXDelta
+	sta BallX
+
+@LeftPaddleCheck:  ; if (x > 32)
+	lda BallX
+	cmp #32
+	bne @LeftPaddleCheckEnd
+	bpl @LeftPaddleCheckEnd
+
+	lda Paddle1Y
+	sec
+	sbc #16
+	cmp BallY
+	bpl @LeftPaddleCheckEnd
+	clc
+	adc #24
+	cmp BallY
+	bmi @LeftPaddleCheckEnd
+
+	lda #01
+	sta BallXDelta
+@LeftPaddleCheckEnd:
+
+@RightPaddleCheck: ; if (x >= 216)
+	lda BallX
+	cmp #216
+	bne @RightPaddleCheckEnd
+	bmi @RightPaddleCheckEnd
+	lda Paddle2Y
+	sec
+	sbc #16
+	cmp BallY
+	bpl @RightPaddleCheckEnd
+	clc
+	adc #24
+	cmp BallY
+	bmi @RightPaddleCheckEnd
+	lda #$FF
+	sta BallXDelta
+@RightPaddleCheckEnd:
+
+	; check right wall (x >= 231)
+@RightWallCheck:
+	lda BallX
+	cmp #231
+@RightWallCheckEnd:
+
+	; Vertical move and bounds check
+
+	lda BallY
+	clc
+	adc BallYDelta
+	sta BallY
+	
+@TopWallCheck:	; if (y <= 13)
+	lda BallY
+	cmp #12
+	bcs @TopWallCheckEnd
+	
+	lda #12
+	sta BallY
+
+	lda #$01
+	sta BallYDelta
+@TopWallCheckEnd:
+
+	; check bottom (y >= 203)
+@BottomWallCheck:	
+	lda BallY
+	cmp #203
+	beq @BottomWallCheckEnd
+	bcc @BottomWallCheckEnd
+
+	lda #203
+	sta BallY
+
+	lda #$FF
+	sta BallYDelta
+@BottomWallCheckEnd:
+
+	rts
+
+
 
 ;
 ; NMI Handler
@@ -294,6 +498,7 @@ NmiHandler:
 
 	; update joysticks
 	jsr ReadJoysticks
+	jsr MoveBall
 
 	rti
 
